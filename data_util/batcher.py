@@ -18,19 +18,30 @@ random.seed(1234)
 
 
 class Example(object):
+    """
+    1.Transfer words to ids. (Including `abstract text` and `article text`)
+    2.Encoder Input: article ids. (enc_input)
+    3.Decoder,
+        Input: [START] + abstract ids
+        Target: abstract ids + [STOP]
+    4.oovs
+    """
 
     def __init__(self, article, abstract_sentences, vocab):
         # Get ids of special tokens
-        start_decoding = vocab.word2id(data.START_DECODING)
-        stop_decoding = vocab.word2id(data.STOP_DECODING)
+        start_decoding = vocab.word2id(data.START_DECODING)  # START_DECODING = '[START]'
+        stop_decoding = vocab.word2id(data.STOP_DECODING)  # STOP_DECODING = '[STOP]'
 
         # Process the article
         article_words = article.split()
-        if len(article_words) > config.max_enc_steps:
+        if len(article_words) > config.max_enc_steps:  # max_enc_steps=400
             article_words = article_words[:config.max_enc_steps]
-        self.enc_len = len(article_words)  # store the length after truncation but before padding
-        self.enc_input = [vocab.word2id(w) for w in
-                          article_words]  # list of word ids; OOVs are represented by the id for UNK token
+
+        # store the length after truncation but before padding
+        self.enc_len = len(article_words)
+
+        # list of word ids; OOVs are represented by the id for UNK token
+        self.enc_input = [vocab.word2id(w) for w in article_words]  # word --> id
 
         # Process the abstract
         abstract = ' '.join(abstract_sentences)  # string
@@ -44,11 +55,16 @@ class Example(object):
         self.dec_len = len(self.dec_input)
 
         # If using pointer-generator mode, we need to store some extra info
-        if config.pointer_gen:
-            # Store a version of the enc_input where in-article OOVs are represented by their temporary OOV id; also store the in-article OOVs words themselves
+        if config.pointer_gen:  # pointer_gen=True
+            """
+            Store a version of the enc_input where in-article OOVs are represented by their temporary OOV id; 
+            also store the in-article OOVs words themselves
+            """
             self.enc_input_extend_vocab, self.article_oovs = data.article2ids(article_words, vocab)
 
-            # Get a verison of the reference summary where in-article OOVs are represented by their temporary article OOV id
+            """
+            Get a verison of the reference summary where in-article OOVs are represented by their temporary article OOV id
+            """
             abs_ids_extend_vocab = data.abstract2ids(abstract_words, vocab, self.article_oovs)
 
             # Overwrite decoder target sequence so it uses the temp article OOV ids
@@ -61,6 +77,16 @@ class Example(object):
         self.original_abstract_sents = abstract_sentences
 
     def get_dec_inp_targ_seqs(self, sequence, max_len, start_id, stop_id):
+        """
+        :param sequence: abstract ids
+        :param max_len: max_dec_steps=100
+        :param start_id: [START]'s id
+        :param stop_id: [STOP]'s id
+        :return:
+
+        Desc: the decoding Input sequence --> remove '[START]' at begin and add next token (or [STOP]) --> Target sequence
+        There have one position moving between `Input Sequence` and `Target Sequence`
+        """
         inp = [start_id] + sequence[:]
         target = sequence[:]
         if len(inp) > max_len:  # truncate
@@ -153,9 +179,10 @@ class Batch(object):
 class Batcher(object):
     """
     self.batcher = Batcher(config.train_data_path,
-                        self.vocab, mode='train',
-                        batch_size=config.batch_size,
-                        single_pass=False
+                            self.vocab,
+                            mode='train',
+                            batch_size=config.batch_size,
+                            single_pass=False  # for demo test
                         )
     """
     BATCH_QUEUE_MAX = 100  # max number of batches the batch_queue can hold
@@ -166,12 +193,17 @@ class Batcher(object):
         self._single_pass = single_pass
         self.mode = mode
         self.batch_size = batch_size
+        """
+        Reference: 
+            https://www.cnblogs.com/zhenwei66/p/6599136.html (py3)
+            https://www.cnblogs.com/itogo/p/5635629.html (py2)
+        """
         # Initialize a queue of Batches waiting to be used, and a queue of Examples waiting to be batched
         self._batch_queue = queue.Queue(self.BATCH_QUEUE_MAX)
         self._example_queue = queue.Queue(self.BATCH_QUEUE_MAX * self.batch_size)
 
         # Different settings depending on whether we're in single_pass mode or not
-        if single_pass:
+        if single_pass:  # single_pass=False
             self._num_example_q_threads = 1  # just one thread, so we read through the dataset just once
             self._num_batch_q_threads = 1  # just one thread to batch examples
             self._bucketing_cache_size = 1  # only load one batch's worth of examples before bucketing; this essentially means no bucketing
@@ -213,6 +245,9 @@ class Batcher(object):
         return batch
 
     def fill_example_queue(self):
+        """
+        :return: yield (article_text, abstract_text)
+        """
         input_gen = self.text_generator(data.example_generator(self._data_path, self._single_pass))
 
         while True:
@@ -280,8 +315,11 @@ class Batcher(object):
                     new_t.start()
 
     def text_generator(self, example_generator):
+        """
+        self.text_generator(data.example_generator(self._data_path, self._single_pass))
+        """
         while True:
-            e = example_generator.next()  # e is a tf.Example
+            e = example_generator.next()  # e is a tf.Example, read text
             try:
                 article_text = e.features.feature['article'].bytes_list.value[
                     0]  # the article text was saved under the key 'article' in the data files

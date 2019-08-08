@@ -89,18 +89,37 @@ class Vocab(object):
 
 
 def example_generator(data_path, single_pass):
+    """
+    data.example_generator(self._data_path, self._single_pass)
+    :param data_path: "xxx/finished_files/chunked/train_*"
+    :param single_pass: False
+    :return:
+    """
     while True:
+        """Examples:
+        >>> import glob
+        >>> filelist = glob.glob("/home/wyb/test")
+        >>> filelist
+        ['/home/wyb/test']
+        >>> filelist = glob.glob("/home/wyb/test/test_*")
+        >>> filelist
+        ['/home/wyb/test/test_01.txt', '/home/wyb/test/test_03.txt', '/home/wyb/test/test_02.txt']
+        >>> filelist = glob.glob("/home/wyb/test/*")
+        >>> filelist
+        ['/home/wyb/test/test_01.txt', '/home/wyb/test/test_03.txt', '/home/wyb/test/test_02.txt']
+        """
         filelist = glob.glob(data_path)  # get the list of datafiles
         assert filelist, ('Error: Empty filelist at %s' % data_path)  # check filelist isn't empty
         if single_pass:
-            filelist = sorted(filelist)
+            filelist = sorted(filelist)  # ascending
         else:
             random.shuffle(filelist)
         for f in filelist:
             reader = open(f, 'rb')
             while True:
                 len_bytes = reader.read(8)
-                if not len_bytes: break  # finished reading this file
+                if not len_bytes:
+                    break  # finished reading this file
                 str_len = struct.unpack('q', len_bytes)[0]
                 example_str = struct.unpack('%ds' % str_len, reader.read(str_len))[0]
                 yield example_pb2.Example.FromString(example_str)
@@ -160,6 +179,10 @@ def outputids2words(id_list, vocab, article_oovs):
 
 
 def abstract2sents(abstract):
+    """
+    SENTENCE_START = '<s>'
+    SENTENCE_END = '</s>'
+    """
     cur = 0
     sents = []
     while True:

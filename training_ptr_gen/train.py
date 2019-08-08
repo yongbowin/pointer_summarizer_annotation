@@ -22,7 +22,28 @@ use_cuda = config.use_gpu and torch.cuda.is_available()
 
 class Train(object):
     def __init__(self):
-        self.vocab = Vocab(config.vocab_path, config.vocab_size)  # vocab_size=50000
+        """
+        Input:
+            vocab_path = "xxx/finished_files/vocab",
+            vocab_size = 50000
+
+        Output:
+            class object: self.vocab --> (dicts `_word_to_id` and `_id_to_word`)
+        """
+        self.vocab = Vocab(config.vocab_path, config.vocab_size)
+
+        """
+        Input:
+            train_data_path = "xxx/finished_files/chunked/train_*",
+            self.vocab: class object,
+            mode = 'train', for training,
+            batch_size = 8,
+            single_pass = False
+
+        Output:
+            class object: self.vocab,
+                (dicts `_word_to_id` and `_id_to_word`)
+        """
         self.batcher = Batcher(config.train_data_path, self.vocab, mode='train',
                                batch_size=config.batch_size, single_pass=False)
         time.sleep(15)
