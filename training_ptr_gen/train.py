@@ -108,8 +108,15 @@ class Train(object):
         s_t_1 = self.model.reduce_state(encoder_hidden)
 
         step_losses = []
-        for di in range(min(max_dec_len, config.max_dec_steps)):
-            y_t_1 = dec_batch[:, di]  # Teacher forcing
+        for di in range(min(max_dec_len, config.max_dec_steps)):  # max_dec_steps=100
+            """
+            >>> a=np.array([[1,2,3],[4,5,6]])
+            >>> a[:,2]
+            array([3, 6])
+            >>> a.shape
+            (2, 3)
+            """
+            y_t_1 = dec_batch[:, di]  # Teacher forcing, the last id of each sample.
             final_dist, s_t_1,  c_t_1, attn_dist, p_gen, next_coverage = self.model.decoder(y_t_1, s_t_1,
                                                         encoder_outputs, encoder_feature, enc_padding_mask, c_t_1,
                                                         extra_zeros, enc_batch_extend_vocab,

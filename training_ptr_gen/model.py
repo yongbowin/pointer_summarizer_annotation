@@ -62,19 +62,32 @@ class Encoder(nn.Module):
 
     # seq_lens should be in descending order
     def forward(self, input, seq_lens):
+        """
+        input=enc_batch <-- words ids in it,
+        To acquire the embedding of input sequence by corresponding ids.
+        """
         embedded = self.embedding(input)
 
         """
         Reference: https://www.cnblogs.com/sbj123456789/p/9834018.html
         """
-        packed = pack_padded_sequence(embedded, seq_lens, batch_first=True)
+        packed = pack_padded_sequence(embedded, seq_lens, batch_first=True)  # `seq_lens` is a sequence length list
+
+        """
+        LSTM:
+            output, (h_n, c_n) = self.lstm(packed)
+            
+            output: 保存RNN最后一层的输出的Tensor.
+            h_n: 保存着RNN最后一个时间步的隐状态.
+            c_n: 保存着RNN最后一个时间步的细胞状态.
+        """
         output, hidden = self.lstm(packed)
 
         encoder_outputs, _ = pad_packed_sequence(output, batch_first=True)  # h dim = B x t_k x n
         encoder_outputs = encoder_outputs.contiguous()
 
-        encoder_feature = encoder_outputs.view(-1, 2*config.hidden_dim)  # B * t_k x 2*hidden_dim
-        encoder_feature = self.W_h(encoder_feature)
+        encoder_feature = encoder_outputs.view(-1, 2*config.hidden_dim)  # (B * t_k) x (2*hidden_dim), shape=(x,y)
+        encoder_feature = self.W_h(encoder_feature)  # (B * t_k) x (2*hidden_dim)
 
         return encoder_outputs, encoder_feature, hidden
 
@@ -89,7 +102,11 @@ class ReduceState(nn.Module):
         init_linear_wt(self.reduce_c)
 
     def forward(self, hidden):
-        h, c = hidden # h, c dim = 2 x b x hidden_dim
+        h, c = hidden  # h, c dim = 2 x b x hidden_dim
+        """
+        `transpose()` Reference: https://blog.csdn.net/AnneQiQi/article/details/60866205
+        `transpose(0, 1)` means no change.
+        """
         h_in = h.transpose(0, 1).contiguous().view(-1, config.hidden_dim * 2)
         hidden_reduced_h = F.relu(self.reduce_h(h_in))
         c_in = c.transpose(0, 1).contiguous().view(-1, config.hidden_dim * 2)
@@ -104,18 +121,29 @@ class Attention(nn.Module):
         # attention
         if config.is_coverage:  # is_coverage=False
             self.W_c = nn.Linear(1, config.hidden_dim * 2, bias=False)
-        self.decode_proj = nn.Linear(config.hidden_dim * 2, config.hidden_dim * 2)
+        self.decode_proj = nn.Linear(config.hidden_dim * 2, config.hidden_dim * 2)  # (256*2, 256*2)
         self.v = nn.Linear(config.hidden_dim * 2, 1, bias=False)
 
     def forward(self, s_t_hat, encoder_outputs, encoder_feature, enc_padding_mask, coverage):
         b, t_k, n = list(encoder_outputs.size())
 
         dec_fea = self.decode_proj(s_t_hat)  # B x 2*hidden_dim
-        dec_fea_expanded = dec_fea.unsqueeze(1).expand(b, t_k, n).contiguous() # B x t_k x 2*hidden_dim
-        dec_fea_expanded = dec_fea_expanded.view(-1, n)  # B * t_k x 2*hidden_dim
+        dec_fea_expanded = dec_fea.unsqueeze(1).expand(b, t_k, n).contiguous()  # B x t_k x 2*hidden_dim, shape=(x,y,z)
+        dec_fea_expanded = dec_fea_expanded.view(-1, n)  # B * t_k x 2*hidden_dim, shape=(x,y)
 
-        att_features = encoder_feature + dec_fea_expanded  # B * t_k x 2*hidden_dim
-        if config.is_coverage:
+        """
+        Attention process:
+            1. encoder_outputs --> Linear layer --> encoder_feature, (B * t_k) x (2*hidden_dim), shape=(x,y)
+            2. h, c --> concat (by dim) --> s_t_hat --> Linear layer --> dec_fea
+            3. dec_fea 
+                --> expand: B x (2*hidden_dim) --> B x t_k x (2*hidden_dim), shape=(x,y,z)
+                --> view: (B * t_k) x (2*hidden_dim), shape=(x,y)
+                --> dec_fea_expanded, shape=(x,y)
+            4. att_features = encoder_feature + dec_fea_expanded
+                            (B * t_k) x (2*hidden_dim) + (B * t_k) x (2*hidden_dim)
+        """
+        att_features = encoder_feature + dec_fea_expanded  # B * t_k x 2*hidden_dim, shape=(x,y)
+        if config.is_coverage:  # is_coverage=False, coverage.shape is B x t_k
             coverage_input = coverage.view(-1, 1)  # B * t_k x 1
             coverage_feature = self.W_c(coverage_input)  # B * t_k x 2*hidden_dim
             att_features = att_features + coverage_feature
@@ -129,15 +157,30 @@ class Attention(nn.Module):
         attn_dist = attn_dist_ / normalization_factor
 
         attn_dist = attn_dist.unsqueeze(1)  # B x 1 x t_k
-        c_t = torch.bmm(attn_dist, encoder_outputs)  # B x 1 x n
+        """
+        bmm: batch matrix multiply,
+        
+        Example:
+            >>> batch1 = torch.randn(10, 3, 4)
+            >>> batch2 = torch.randn(10, 4, 5)
+            >>> res = torch.bmm(batch1, batch2)
+            >>> res.size()
+            torch.Size([10, 3, 5])
+        """
+        c_t = torch.bmm(attn_dist, encoder_outputs)  # B x 1 x n, n=2*hidden_dim
         c_t = c_t.view(-1, config.hidden_dim * 2)  # B x 2*hidden_dim
 
         attn_dist = attn_dist.view(-1, t_k)  # B x t_k
 
         if config.is_coverage:
-            coverage = coverage.view(-1, t_k)
+            coverage = coverage.view(-1, t_k)  # B x t_k
             coverage = coverage + attn_dist
 
+        """
+        c_t: B x 2*hidden_dim, Attention Vector for this batch (i.e., Attention Weight x encoder_outputs),
+        attn_dist: B x t_k, Attention Weight,
+        coverage: B x t_k
+        """
         return c_t, attn_dist, coverage
 
 
@@ -149,24 +192,28 @@ class Decoder(nn.Module):
         self.embedding = nn.Embedding(config.vocab_size, config.emb_dim)
         init_wt_normal(self.embedding.weight)
 
-        self.x_context = nn.Linear(config.hidden_dim * 2 + config.emb_dim, config.emb_dim)
+        """
+        hidden_dim = 256
+        emb_dim = 128
+        """
+        self.x_context = nn.Linear(config.hidden_dim * 2 + config.emb_dim, config.emb_dim)  # (256*2+128, 128)
 
-        self.lstm = nn.LSTM(config.emb_dim, config.hidden_dim, num_layers=1, batch_first=True, bidirectional=False)
+        self.lstm = nn.LSTM(config.emb_dim, config.hidden_dim, num_layers=1, batch_first=True, bidirectional=False)  # (128, 256)
         init_lstm_wt(self.lstm)
 
         if config.pointer_gen:
-            self.p_gen_linear = nn.Linear(config.hidden_dim * 4 + config.emb_dim, 1)
+            self.p_gen_linear = nn.Linear(config.hidden_dim * 4 + config.emb_dim, 1)  # (256*4+128, 1)
 
         # p_vocab
-        self.out1 = nn.Linear(config.hidden_dim * 3, config.hidden_dim)
-        self.out2 = nn.Linear(config.hidden_dim, config.vocab_size)
+        self.out1 = nn.Linear(config.hidden_dim * 3, config.hidden_dim)  # (256*3, 256)
+        self.out2 = nn.Linear(config.hidden_dim, config.vocab_size)  # (256, 50000)
         init_linear_wt(self.out2)
 
     def forward(self, y_t_1, s_t_1, encoder_outputs, encoder_feature, enc_padding_mask,
                 c_t_1, extra_zeros, enc_batch_extend_vocab, coverage, step):
 
         if not self.training and step == 0:
-            h_decoder, c_decoder = s_t_1
+            h_decoder, c_decoder = s_t_1  # h, c dim = 1 x b x hidden_dim
             s_t_hat = torch.cat((h_decoder.view(-1, config.hidden_dim),
                                  c_decoder.view(-1, config.hidden_dim)), 1)  # B x 2*hidden_dim
             c_t, _, coverage_next = self.attention_network(s_t_hat, encoder_outputs, encoder_feature,
@@ -192,12 +239,12 @@ class Decoder(nn.Module):
             p_gen = self.p_gen_linear(p_gen_input)
             p_gen = F.sigmoid(p_gen)
 
-        output = torch.cat((lstm_out.view(-1, config.hidden_dim), c_t), 1) # B x hidden_dim * 3
-        output = self.out1(output) # B x hidden_dim
+        output = torch.cat((lstm_out.view(-1, config.hidden_dim), c_t), 1)  # B x hidden_dim * 3
+        output = self.out1(output)  # B x hidden_dim
 
         # output = F.relu(output)
 
-        output = self.out2(output) # B x vocab_size
+        output = self.out2(output)  # B x vocab_size
         vocab_dist = F.softmax(output, dim=1)
 
         if config.pointer_gen:

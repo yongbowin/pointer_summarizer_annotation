@@ -138,7 +138,7 @@ class Batch(object):
             self.enc_batch[i, :] = ex.enc_input[:]
             self.enc_lens[i] = ex.enc_len
             for j in range(ex.enc_len):
-                self.enc_padding_mask[i][j] = 1
+                self.enc_padding_mask[i][j] = 1  # padded position is 0
 
         # For pointer-generator mode, need to store some extra info
         if config.pointer_gen:
@@ -154,7 +154,7 @@ class Batch(object):
     def init_decoder_seq(self, example_list):
         # Pad the inputs and targets
         for ex in example_list:
-            ex.pad_decoder_inp_targ(config.max_dec_steps, self.pad_id)
+            ex.pad_decoder_inp_targ(config.max_dec_steps, self.pad_id)  # max_dec_steps=100
 
         # Initialize the numpy arrays.
         self.dec_batch = np.zeros((self.batch_size, config.max_dec_steps), dtype=np.int32)
@@ -274,7 +274,7 @@ class Batcher(object):
             if self.mode == 'decode':
                 # beam search decode mode single example repeated in the batch
                 ex = self._example_queue.get()
-                b = [ex for _ in range(self.batch_size)]
+                b = [ex for _ in range(self.batch_size)]  # TODO: i.e., beam size=batch size
                 self._batch_queue.put(Batch(b, self._vocab, self.batch_size))
             else:
                 # Get bucketing_cache_size-many batches of Examples into a list, then sort
