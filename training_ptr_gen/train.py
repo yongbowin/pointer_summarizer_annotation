@@ -19,9 +19,10 @@ from train_util import get_input_from_batch, get_output_from_batch
 
 use_cuda = config.use_gpu and torch.cuda.is_available()
 
+
 class Train(object):
     def __init__(self):
-        self.vocab = Vocab(config.vocab_path, config.vocab_size)
+        self.vocab = Vocab(config.vocab_path, config.vocab_size)  # vocab_size=50000
         self.batcher = Batcher(config.train_data_path, self.vocab, mode='train',
                                batch_size=config.batch_size, single_pass=False)
         time.sleep(15)
@@ -53,13 +54,14 @@ class Train(object):
 
         params = list(self.model.encoder.parameters()) + list(self.model.decoder.parameters()) + \
                  list(self.model.reduce_state.parameters())
-        initial_lr = config.lr_coverage if config.is_coverage else config.lr
-        self.optimizer = Adagrad(params, lr=initial_lr, initial_accumulator_value=config.adagrad_init_acc)
+
+        initial_lr = config.lr_coverage if config.is_coverage else config.lr  # lr_coverage=0.15, is_coverage=False, lr=0.15
+        self.optimizer = Adagrad(params, lr=initial_lr, initial_accumulator_value=config.adagrad_init_acc)  # adagrad_init_acc=0.1
 
         start_iter, start_loss = 0, 0
 
         if model_file_path is not None:
-            state = torch.load(model_file_path, map_location= lambda storage, location: storage)
+            state = torch.load(model_file_path, map_location=lambda storage, location: storage)
             start_iter = state['iter']
             start_loss = state['current_loss']
 
@@ -117,7 +119,7 @@ class Train(object):
 
         return loss.item()
 
-    def trainIters(self, n_iters, model_file_path=None):
+    def trainIters(self, n_iters, model_file_path=None):  # (500000, None)
         iter, running_avg_loss = self.setup_train(model_file_path)
         start = time.time()
         while iter < n_iters:
@@ -137,6 +139,7 @@ class Train(object):
             if iter % 5000 == 0:
                 self.save_model(running_avg_loss, iter)
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train script")
     parser.add_argument("-m",
@@ -147,4 +150,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     train_processor = Train()
+    """
+    max_iterations = 500,000
+    """
     train_processor.trainIters(config.max_iterations, args.model_file_path)

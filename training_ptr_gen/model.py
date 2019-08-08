@@ -14,12 +14,13 @@ torch.manual_seed(123)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(123)
 
+
 def init_lstm_wt(lstm):
     for names in lstm._all_weights:
         for name in names:
             if name.startswith('weight_'):
                 wt = getattr(lstm, name)
-                wt.data.uniform_(-config.rand_unif_init_mag, config.rand_unif_init_mag)
+                wt.data.uniform_(-config.rand_unif_init_mag, config.rand_unif_init_mag)  # (-0.02, 0.02)
             elif name.startswith('bias_'):
                 # set forget bias to 1
                 bias = getattr(lstm, name)
@@ -28,32 +29,44 @@ def init_lstm_wt(lstm):
                 bias.data.fill_(0.)
                 bias.data[start:end].fill_(1.)
 
+
 def init_linear_wt(linear):
     linear.weight.data.normal_(std=config.trunc_norm_init_std)
     if linear.bias is not None:
         linear.bias.data.normal_(std=config.trunc_norm_init_std)
 
+
 def init_wt_normal(wt):
-    wt.data.normal_(std=config.trunc_norm_init_std)
+    """
+    normal_(mean=0, std=1, *, generator=None) -> Tensor
+    Fills :attr:`self` tensor with elements samples from the normal distribution
+    """
+    wt.data.normal_(std=config.trunc_norm_init_std)  # trunc_norm_init_std=1e-4
+
 
 def init_wt_unif(wt):
     wt.data.uniform_(-config.rand_unif_init_mag, config.rand_unif_init_mag)
 
+
 class Encoder(nn.Module):
     def __init__(self):
         super(Encoder, self).__init__()
-        self.embedding = nn.Embedding(config.vocab_size, config.emb_dim)
-        init_wt_normal(self.embedding.weight)
+        self.embedding = nn.Embedding(config.vocab_size, config.emb_dim)  # (vocab_size=50000, emb_dim=128)
+        init_wt_normal(self.embedding.weight)  # init weight with normal distribution
 
+        # emb_dim=128, hidden_dim=256, (batch, seq, feature)
         self.lstm = nn.LSTM(config.emb_dim, config.hidden_dim, num_layers=1, batch_first=True, bidirectional=True)
-        init_lstm_wt(self.lstm)
+        init_lstm_wt(self.lstm)  # init lstm weight
 
         self.W_h = nn.Linear(config.hidden_dim * 2, config.hidden_dim * 2, bias=False)
 
-    #seq_lens should be in descending order
+    # seq_lens should be in descending order
     def forward(self, input, seq_lens):
         embedded = self.embedding(input)
 
+        """
+        Reference: https://www.cnblogs.com/sbj123456789/p/9834018.html
+        """
         packed = pack_padded_sequence(embedded, seq_lens, batch_first=True)
         output, hidden = self.lstm(packed)
 
@@ -64,6 +77,7 @@ class Encoder(nn.Module):
         encoder_feature = self.W_h(encoder_feature)
 
         return encoder_outputs, encoder_feature, hidden
+
 
 class ReduceState(nn.Module):
     def __init__(self):
@@ -81,13 +95,14 @@ class ReduceState(nn.Module):
         c_in = c.transpose(0, 1).contiguous().view(-1, config.hidden_dim * 2)
         hidden_reduced_c = F.relu(self.reduce_c(c_in))
 
-        return (hidden_reduced_h.unsqueeze(0), hidden_reduced_c.unsqueeze(0)) # h, c dim = 1 x b x hidden_dim
+        return (hidden_reduced_h.unsqueeze(0), hidden_reduced_c.unsqueeze(0))  # h, c dim = 1 x b x hidden_dim
+
 
 class Attention(nn.Module):
     def __init__(self):
         super(Attention, self).__init__()
         # attention
-        if config.is_coverage:
+        if config.is_coverage:  # is_coverage=False
             self.W_c = nn.Linear(1, config.hidden_dim * 2, bias=False)
         self.decode_proj = nn.Linear(config.hidden_dim * 2, config.hidden_dim * 2)
         self.v = nn.Linear(config.hidden_dim * 2, 1, bias=False)
@@ -95,21 +110,21 @@ class Attention(nn.Module):
     def forward(self, s_t_hat, encoder_outputs, encoder_feature, enc_padding_mask, coverage):
         b, t_k, n = list(encoder_outputs.size())
 
-        dec_fea = self.decode_proj(s_t_hat) # B x 2*hidden_dim
+        dec_fea = self.decode_proj(s_t_hat)  # B x 2*hidden_dim
         dec_fea_expanded = dec_fea.unsqueeze(1).expand(b, t_k, n).contiguous() # B x t_k x 2*hidden_dim
         dec_fea_expanded = dec_fea_expanded.view(-1, n)  # B * t_k x 2*hidden_dim
 
-        att_features = encoder_feature + dec_fea_expanded # B * t_k x 2*hidden_dim
+        att_features = encoder_feature + dec_fea_expanded  # B * t_k x 2*hidden_dim
         if config.is_coverage:
             coverage_input = coverage.view(-1, 1)  # B * t_k x 1
             coverage_feature = self.W_c(coverage_input)  # B * t_k x 2*hidden_dim
             att_features = att_features + coverage_feature
 
-        e = F.tanh(att_features) # B * t_k x 2*hidden_dim
+        e = F.tanh(att_features)  # B * t_k x 2*hidden_dim
         scores = self.v(e)  # B * t_k x 1
         scores = scores.view(-1, t_k)  # B x t_k
 
-        attn_dist_ = F.softmax(scores, dim=1)*enc_padding_mask # B x t_k
+        attn_dist_ = F.softmax(scores, dim=1)*enc_padding_mask  # B x t_k
         normalization_factor = attn_dist_.sum(1, keepdim=True)
         attn_dist = attn_dist_ / normalization_factor
 
@@ -124,6 +139,7 @@ class Attention(nn.Module):
             coverage = coverage + attn_dist
 
         return c_t, attn_dist, coverage
+
 
 class Decoder(nn.Module):
     def __init__(self):
@@ -141,7 +157,7 @@ class Decoder(nn.Module):
         if config.pointer_gen:
             self.p_gen_linear = nn.Linear(config.hidden_dim * 4 + config.emb_dim, 1)
 
-        #p_vocab
+        # p_vocab
         self.out1 = nn.Linear(config.hidden_dim * 3, config.hidden_dim)
         self.out2 = nn.Linear(config.hidden_dim, config.vocab_size)
         init_linear_wt(self.out2)
@@ -179,7 +195,7 @@ class Decoder(nn.Module):
         output = torch.cat((lstm_out.view(-1, config.hidden_dim), c_t), 1) # B x hidden_dim * 3
         output = self.out1(output) # B x hidden_dim
 
-        #output = F.relu(output)
+        # output = F.relu(output)
 
         output = self.out2(output) # B x vocab_size
         vocab_dist = F.softmax(output, dim=1)
@@ -196,6 +212,7 @@ class Decoder(nn.Module):
             final_dist = vocab_dist
 
         return final_dist, s_t, c_t, attn_dist, p_gen, coverage
+
 
 class Model(object):
     def __init__(self, model_file_path=None, is_eval=False):
@@ -220,7 +237,7 @@ class Model(object):
         self.reduce_state = reduce_state
 
         if model_file_path is not None:
-            state = torch.load(model_file_path, map_location= lambda storage, location: storage)
+            state = torch.load(model_file_path, map_location=lambda storage, location: storage)
             self.encoder.load_state_dict(state['encoder_state_dict'])
             self.decoder.load_state_dict(state['decoder_state_dict'], strict=False)
             self.reduce_state.load_state_dict(state['reduce_state_dict'])
